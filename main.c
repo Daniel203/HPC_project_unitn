@@ -5,7 +5,7 @@
 #include <stdlib.h>
 
 /* The size of the matrix NxN */
-#define N 2000
+#define N 1000
 /* The size of the submatrix block BxB */
 #define B 100
 /* The number of blocks in a column in the matrix */
