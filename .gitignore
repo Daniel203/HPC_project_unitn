@@ -53,3 +53,6 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+execution_output/
+pbs_scripts/
