@@ -4,8 +4,10 @@
 # Automatically generates PBS jobs for different configurations
 
 # Create directories for results if they do not exist
+mkdir -p benchmarks
 mkdir -p benchmarks/execution_output
 mkdir -p benchmarks/pbs_scripts
+
 
 # Clean the CSV file before starting (optional - comment out if you want to keep previous results)
 # rm -f benchmark_results.csv
