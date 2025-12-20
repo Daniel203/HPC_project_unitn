@@ -1,6 +1,5 @@
 #ifndef CONFIG_H
 #define CONFIG_H
-
 #include <mpi.h>
 #include <stdlib.h>
 
@@ -9,6 +8,11 @@
 #define NUM_RUNS 3
 #define ENABLE_VERIFICATION 1
 #define ENABLE_CSV_LOGGING 1
+
+// Block-cyclic distribution parameter
+// This multiplier determines how many blocks relative to grid dimension
+// Higher values = better load balancing but more communication overhead
+#define BLOCK_CYCLIC_MULTIPLIER 4
 
 // Configuration structure
 typedef struct {

@@ -34,13 +34,16 @@ static void allocate_global_matrices(CholeskyContext* ctx) {
 
 // Print initial configuration info
 static void print_config_info(const CholeskyContext* ctx) {
-    printf("Matrix size: %d x %d\n", ctx->config.matrix_size, ctx->config.matrix_size);
+    printf("Matrix size: %d x %d\n", ctx->config.matrix_size, 
+           ctx->config.matrix_size);
     printf("Number of blocks: %d\n",
-           (ctx->config.matrix_size + ctx->config.block_size - 1) / ctx->config.block_size);
+           (ctx->config.matrix_size + ctx->config.block_size - 1) / 
+           ctx->config.block_size);
     printf("Total matrix elements: %.2f million\n",
            (ctx->config.matrix_size * ctx->config.matrix_size) / 1e6);
     printf("Memory per matrix: %.2f MB\n",
-           (ctx->config.matrix_size * ctx->config.matrix_size * sizeof(double)) / (1024.0 * 1024.0));
+           (ctx->config.matrix_size * ctx->config.matrix_size * sizeof(double)) / 
+           (1024.0 * 1024.0));
     printf("Running %d iterations for timing...\n\n", ctx->config.num_runs);
 }
 
@@ -64,19 +67,18 @@ int main(int argc, char* argv[]) {
     }
 
     // Execute benchmark
-    TimingResults results = execute_benchmark(ctx->global_A, ctx->global_A_backup,
-                                             ctx->global_L, &ctx->grid, &ctx->config);
+    TimingResults results = execute_benchmark(ctx);
 
     // Root prints results
     if (ctx->grid.rank == 0) {
-        print_performance_summary(&ctx->grid, &ctx->config, &results);
+        print_performance_summary(ctx, &results);
 
         if (ctx->config.enable_csv) {
-            log_to_csv(&ctx->grid, &ctx->config, &results);
+            log_to_csv(ctx, &results);
         }
 
         if (ctx->config.enable_verify) {
-            verify_and_report(ctx->global_A_backup, ctx->global_L, &ctx->config);
+            verify_and_report(ctx);
         } else {
             printf("\n(Verification disabled for performance testing)\n");
         }
