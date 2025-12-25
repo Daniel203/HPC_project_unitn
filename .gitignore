@@ -58,3 +58,4 @@ benchmarks/
 build/
 venv/
 bin/
+plots/
