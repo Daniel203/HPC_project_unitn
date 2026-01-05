@@ -3,13 +3,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 // Sequential Cholesky factorization for a single block
-static void cholesky_block(double* A, int n, int ld) {
+static void cholesky_block(double* A, int n, int ld, const Config* cfg) {
     for (int k = 0; k < n; k++) {
         A[k * ld + k] = sqrt(A[k * ld + k]);
+        
+        #pragma omp parallel for if(cfg->enable_openmp && n > 64)
         for (int i = k + 1; i < n; i++) {
             A[i * ld + k] /= A[k * ld + k];
         }
+        
+        #pragma omp parallel for collapse(2) if(cfg->enable_openmp && n > 64)
         for (int j = k + 1; j < n; j++) {
             for (int i = j; i < n; i++) {
                 A[i * ld + j] -= A[i * ld + k] * A[j * ld + k];
@@ -33,7 +41,7 @@ static double* get_local_block_ptr(double* local_A, int block_row, int block_col
     find_block_owner(grid, block_row, block_col, &owner_row, &owner_col);
     
     if (owner_row != grid->my_row || owner_col != grid->my_col) {
-        return NULL; // Not owned by this process
+        return NULL;
     }
     
     int local_br = block_row / grid->grid_rows;
@@ -59,12 +67,19 @@ static void trsm_column_blocks(double* local_A, const double* diag_block,
     int block_size = cfg->block_size;
     int owner_col = k % grid->grid_cols;
     
-    // Only processes in the same column as the diagonal block participate
     if (grid->my_col != owner_col) {
         return;
     }
     
-    // Process blocks below diagonal that this process owns
+    // Count owned blocks for OpenMP decision
+    int num_owned_blocks = 0;
+    for (int i = k + 1; i < total_block_rows; i++) {
+        if (owns_block(grid, i, k)) {
+            num_owned_blocks++;
+        }
+    }
+    
+    #pragma omp parallel for schedule(dynamic) if(cfg->enable_openmp && num_owned_blocks > 1)
     for (int i = k + 1; i < total_block_rows; i++) {
         if (!owns_block(grid, i, k)) {
             continue;
@@ -75,14 +90,11 @@ static void trsm_column_blocks(double* local_A, const double* diag_block,
         if (block_ik == NULL) continue;
         
         int local_storage_cols = num_local_block_cols * block_size;
-        
-        // Determine actual block dimensions
         int block_rows = ((i + 1) * block_size <= cfg->matrix_size) 
                         ? block_size : cfg->matrix_size - i * block_size;
         int block_cols = ((k + 1) * block_size <= cfg->matrix_size)
                         ? block_size : cfg->matrix_size - k * block_size;
         
-        // Solve: L_kk * X^T = A_ik  =>  X = A_ik * L_kk^{-T}
         for (int row = 0; row < block_rows; row++) {
             for (int col = 0; col < block_cols; col++) {
                 double sum = block_ik[row * local_storage_cols + col];
@@ -124,7 +136,6 @@ static void gather_column_panel(double* col_panel, const double* local_A,
             int block_cols = ((k + 1) * block_size <= cfg->matrix_size)
                             ? block_size : cfg->matrix_size - k * block_size;
             
-            // Copy to column panel buffer
             for (int row = 0; row < block_rows; row++) {
                 for (int col = 0; col < block_cols; col++) {
                     int global_row = global_row_start + row;
@@ -135,11 +146,9 @@ static void gather_column_panel(double* col_panel, const double* local_A,
         }
     }
     
-    // Reduce within column communicator
     MPI_Allreduce(MPI_IN_PLACE, col_panel, cfg->matrix_size * block_size,
                   MPI_DOUBLE, MPI_SUM, grid->col_comm);
     
-    // Broadcast across rows so all processes have the column panel
     MPI_Bcast(col_panel, cfg->matrix_size * block_size, MPI_DOUBLE,
               owner_col, grid->row_comm);
 }
@@ -151,7 +160,17 @@ static void syrk_trailing_matrix(double* local_A, const double* col_panel,
     int total_block_rows = (cfg->matrix_size + cfg->block_size - 1) / cfg->block_size;
     int block_size = cfg->block_size;
     
-    // Update all blocks in lower triangular part
+    // Count owned blocks for OpenMP decision
+    int num_owned_blocks = 0;
+    for (int i = k + 1; i < total_block_rows; i++) {
+        for (int j = k + 1; j <= i; j++) {
+            if (owns_block(grid, i, j)) {
+                num_owned_blocks++;
+            }
+        }
+    }
+    
+    #pragma omp parallel for collapse(2) schedule(guided) if(cfg->enable_openmp && num_owned_blocks > 4)
     for (int i = k + 1; i < total_block_rows; i++) {
         for (int j = k + 1; j <= i; j++) {
             if (!owns_block(grid, i, j)) {
@@ -173,14 +192,12 @@ static void syrk_trailing_matrix(double* local_A, const double* col_panel,
             int panel_cols = ((k + 1) * block_size <= cfg->matrix_size)
                             ? block_size : cfg->matrix_size - k * block_size;
             
-            // A_ij -= L_ik * L_jk^T
             for (int row = 0; row < block_rows; row++) {
                 int global_row = global_row_start + row;
                 
                 for (int col = 0; col < block_cols; col++) {
                     int global_col = global_col_start + col;
                     
-                    // Only update lower triangular part
                     if (global_col > global_row) continue;
                     
                     double sum = 0.0;
@@ -200,7 +217,6 @@ void parallel_cholesky(double* local_A, const ProcGrid* grid, const Config* cfg,
     int num_blocks = (cfg->matrix_size + cfg->block_size - 1) / cfg->block_size;
     int block_size = cfg->block_size;
     
-    // Calculate number of local blocks in column dimension
     int num_local_block_cols = local_cols / block_size;
     
     double* diag_block = (double*)calloc(block_size * block_size, sizeof(double));
@@ -227,8 +243,8 @@ void parallel_cholesky(double* local_A, const ProcGrid* grid, const Config* cfg,
                 }
             }
             
-            // Factorize
-            cholesky_block(diag_block, actual_block_size, block_size);
+            // Factorize (with optional OpenMP)
+            cholesky_block(diag_block, actual_block_size, block_size, cfg);
             
             // Copy back to local storage
             for (int i = 0; i < actual_block_size; i++) {
@@ -258,3 +274,4 @@ void parallel_cholesky(double* local_A, const ProcGrid* grid, const Config* cfg,
     free(diag_block);
     free(col_panel);
 }
+

@@ -55,6 +55,7 @@ void log_to_csv(const CholeskyContext* ctx, const TimingResults* results) {
         fprintf(csv_file, "MatrixSize,NumProcesses,GridRows,GridCols,");
         fprintf(csv_file, "BlockSize,NumBlocks,");
         fprintf(csv_file, "TestCategory,Placement,");
+        fprintf(csv_file, "OpenMPEnabled,NumThreads,TotalCores,");  
         fprintf(csv_file, "AvgTime,MinTime,MaxTime,StdDev,GFLOPS,");
         fprintf(csv_file, "WorkPerProcess,");
         fprintf(csv_file, "Timestamp\n");
@@ -73,11 +74,15 @@ void log_to_csv(const CholeskyContext* ctx, const TimingResults* results) {
         (long long)ctx->config.matrix_size * ctx->config.matrix_size;
     long long work_per_process = total_elements / ctx->grid.np;
 
+    int total_cores = ctx->grid.np * ctx->config.num_threads;  
+
     fprintf(csv_file, "%d,%d,%d,%d,%d,%d,", ctx->config.matrix_size,
             ctx->grid.np, ctx->grid.grid_rows, ctx->grid.grid_cols,
             ctx->config.block_size, num_blocks);
     fprintf(csv_file, "%s,%s,", ctx->config.test_category,
             ctx->config.placement);
+    fprintf(csv_file, "%d,%d,%d,",
+            ctx->config.enable_openmp, ctx->config.num_threads, total_cores);
     fprintf(csv_file, "%.6f,%.6f,%.6f,%.6f,%.4f,", results->avg_time,
             results->min_time, results->max_time, results->std_dev,
             results->gflops);
@@ -129,7 +134,7 @@ static double run_iteration(CholeskyContext* ctx, double** local_A,
     // Each process generates its own blocks
     generate_spd_matrix_distributed(
         *local_A, &ctx->grid, ctx->config.matrix_size, ctx->config.block_size,
-        *local_rows, *local_cols);
+        *local_rows, *local_cols, &ctx->config);
 
     MPI_Barrier(MPI_COMM_WORLD);
     double start = MPI_Wtime();

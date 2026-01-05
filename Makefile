@@ -1,7 +1,7 @@
 # Compiler and flags
 MPICC = mpicc
-CFLAGS = -O3 -std=c99 -Wall -Wextra
-LDFLAGS = -lm
+CFLAGS = -O3 -std=c99 -Wall -Wextra -fopenmp
+LDFLAGS = -lm -fopenmp
 
 # Directories
 SRC_DIR = src

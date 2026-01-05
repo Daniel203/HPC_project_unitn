@@ -15,48 +15,55 @@ void generate_spd_matrix(double* A, int n) {
 
 void generate_spd_matrix_distributed(double* local_A, const ProcGrid* grid,
                                      int matrix_size, int block_size,
-                                     int local_rows, int local_cols) {
+                                     int local_rows, int local_cols,
+                                     const Config* cfg) {
     int num_local_block_cols = local_cols / block_size;
     int total_block_rows = (matrix_size + block_size - 1) / block_size;
     int total_block_cols = (matrix_size + block_size - 1) / block_size;
-    
+
     // Initialize to zero
     memset(local_A, 0, local_rows * local_cols * sizeof(double));
-    
+
     // Generate only the blocks owned by this process
+    #pragma omp parallel for collapse(2) if(cfg->enable_openmp)
     for (int br = grid->my_row; br < total_block_rows; br += grid->grid_rows) {
-        for (int bc = grid->my_col; bc < total_block_cols; bc += grid->grid_cols) {
+        for (int bc = grid->my_col; bc < total_block_cols;
+             bc += grid->grid_cols) {
             // Only generate lower triangular part
-            if (bc > br) continue;
-            
+            if (bc > br)
+                continue;
+
             int local_br = br / grid->grid_rows;
             int local_bc = bc / grid->grid_cols;
-            
+
             int global_row_start = br * block_size;
             int global_col_start = bc * block_size;
-            
+
             int block_rows = (global_row_start + block_size <= matrix_size)
-                            ? block_size : matrix_size - global_row_start;
+                                 ? block_size
+                                 : matrix_size - global_row_start;
             int block_cols = (global_col_start + block_size <= matrix_size)
-                            ? block_size : matrix_size - global_col_start;
-            
+                                 ? block_size
+                                 : matrix_size - global_col_start;
+
             // Generate elements for this block
             for (int i = 0; i < block_rows; i++) {
                 for (int j = 0; j < block_cols; j++) {
                     int global_i = global_row_start + i;
                     int global_j = global_col_start + j;
-                    
+
                     // Only lower triangular part
-                    if (global_j > global_i) continue;
-                    
+                    if (global_j > global_i)
+                        continue;
+
                     int local_i = local_br * block_size + i;
                     int local_j = local_bc * block_size + j;
-                    
+
                     // Same formula as before
-                    double value = (global_i == global_j) 
-                                  ? (matrix_size + 1.0) 
-                                  : 1.0 / (1.0 + abs(global_i - global_j));
-                    
+                    double value = (global_i == global_j)
+                                       ? (matrix_size + 1.0)
+                                       : 1.0 / (1.0 + abs(global_i - global_j));
+
                     local_A[local_i * local_cols + local_j] = value;
                 }
             }

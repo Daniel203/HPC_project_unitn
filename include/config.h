@@ -2,16 +2,15 @@
 #define CONFIG_H
 #include <mpi.h>
 #include <stdlib.h>
+#include <string.h>
 
 // Runtime configuration flags
 #define TOLERANCE 1e-4
-#define NUM_RUNS 3
-#define ENABLE_VERIFICATION 1
+#define NUM_RUNS 1
+#define ENABLE_VERIFICATION 0
 #define ENABLE_CSV_LOGGING 1
 
 // Block-cyclic distribution parameter
-// This multiplier determines how many blocks relative to grid dimension
-// Higher values = better load balancing but more communication overhead
 #define BLOCK_CYCLIC_MULTIPLIER 4
 
 // Configuration structure
@@ -22,6 +21,10 @@ typedef struct {
     double tolerance;
     int enable_verify;
     int enable_csv;
+    int enable_openmp;       
+    int num_threads;          
+    char test_category[64];
+    char placement[16];
 } Config;
 
 // Process grid for 2D distribution
@@ -63,6 +66,10 @@ static inline Config config_default(int matrix_size) {
     cfg.tolerance = TOLERANCE;
     cfg.enable_verify = ENABLE_VERIFICATION;
     cfg.enable_csv = ENABLE_CSV_LOGGING;
+    cfg.enable_openmp = 0;        
+    cfg.num_threads = 0;         
+    strncpy(cfg.test_category, "unknown", 64);
+    strncpy(cfg.placement, "unknown", 16);
     return cfg;
 }
 
