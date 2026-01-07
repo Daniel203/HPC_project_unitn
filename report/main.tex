@@ -6,19 +6,19 @@
 \usepackage{graphicx}   
 \usepackage{amsmath}   
 \usepackage{geometry} 
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{microtype}
 \geometry{margin=2.5cm}
 
 \usepackage{xurl}
 \usepackage[pdfa]{hyperref}
-\hypersetup{
-    colorlinks=false, 
-    hidelinks
-}
+\usepackage{tikz}
 
 % Document information
-\title{Project Title}
-\author{First Name Last Name \\ Student ID}
-\date{\today}
+\title{HPC Report \\ Cholesky factorization}
+\author{Arduini Daniel 248727 \\ Tezza Michael 248725}
+\date{}
 
 \begin{document}
 
@@ -26,7 +26,17 @@
 \tableofcontents
 \newpage
 
+\input{sections/abstract}
+\newpage
 \input{sections/introduction}
+\newpage
+\input{sections/parallel_design}
+\newpage
+\input{sections/implementation_details}
 
+
+\newpage
+\bibliographystyle{abbrv} 
+\bibliography{references} 
 \end{document}
 

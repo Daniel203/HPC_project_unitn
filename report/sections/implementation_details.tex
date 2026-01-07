@@ -1,0 +1,94 @@
+\section{Implementation Details}
+
+The proposed parallel design was implemented in C using a hybrid MPI + OpenMP
+approach. The codebase focuses on minimizing memory footprint and maximizing
+communication efficiency without relying on external linear algebra libraries
+(like BLAS or LAPACK).
+
+\subsection{Software Architecture and Process Grid}
+To manage the complexity of the distributed state, we encapsulated the
+simulation data in a \texttt{CholeskyContext} structure. The logical grid
+topology is managed by a custom \texttt{ProcGrid} structure, initialized during
+the setup phase.
+
+\begin{itemize}
+    \item \textbf{Process Grid Topology:} We organize the $P$ available MPI
+        processes into a logical 2D grid of dimensions $P_{rows} \times
+        P_{cols}$.
+    \begin{itemize}
+        \item This grid is distinct from the data matrix; it represents the
+            layout of execution units.
+        \item The dimensions are calculated dynamically: we attempt to create a
+            square grid ($P_{rows} \approx \sqrt{P}$) to minimize the perimeter
+            (and thus communication costs). If $P$ is not a perfect square
+            (e.g., $P=8$), the initialization logic produces the most compact
+            rectangular grid possible (e.g., $2 \times 4$).
+    \end{itemize}
+
+    \item \textbf{Custom Communicators:} To implement the row and column
+        broadcasts described in Section 2 efficiently, we utilize
+        \texttt{MPI\_Comm\_split} to partition the global
+        \texttt{MPI\_COMM\_WORLD} based on the process grid coordinates:
+    \begin{itemize}
+        \item \texttt{row\_comm}: Grouping all processes with the same
+            $P_{row}$ coordinate.
+        \item \texttt{col\_comm}: Grouping all processes with the same
+            $P_{col}$ coordinate.
+    \end{itemize}
+    This ensures that collective operations like \texttt{MPI\_Bcast} are
+    restricted strictly to the relevant subset of processes (a single row or
+    column of the process grid) rather than involving the entire cluster.
+\end{itemize}
+
+\subsection{Distributed Data Generation (Memory Scalability)}
+A critical optimization in our implementation is the \textbf{distributed
+generation} of the input matrix. Standard approaches often generate the full
+matrix on the root process and scatter it, which bottlenecks the maximum
+problem size to the RAM of a single node.
+
+Instead, we implemented a parallel generation routine where each processor
+allocates and computes \textit{only} the matrix elements belonging to its
+specific local blocks:
+\[
+    A_{ij} = \begin{cases} N+1 & \text{if } i=j \\ \frac{1}{1+|i-j|} & \text{if } i \neq j \end{cases}
+\]
+By using the block-cyclic mapping formulas to determine ownership, we ensure
+that the full matrix never exists in the memory of a single node. This grants
+our solution \text{linear memory scalability}, allowing us to handle problem sizes
+that are constrained only by the aggregate memory of the cluster rather than
+the capacity of individual nodes.
+
+% \subsection{Communication Strategy: The Panel Gather}
+% One of the most complex implementation details is handling the "Panel
+% Broadcast" phase. Since the blocks of a column panel are distributed cyclically
+% among different processors in the same column, no single processor holds the
+% entire panel required for the horizontal broadcast.
+%
+% We solved this using a two-step strategy (implemented in
+% \texttt{gather\_column\_panel}):
+% \begin{enumerate}
+%     \item \textbf{Intra-Column Reduction:} We first use \texttt{MPI\_Allreduce}
+%         with the \texttt{MPI\_SUM} operator on the \texttt{col\_comm}. Since
+%         each processor only holds pieces of the panel (and zeros elsewhere),
+%         summing them up effectively "assembles" the full panel on every
+%         processor within that column.
+%     \item \textbf{Row Broadcast:} Once the panel is assembled, each processor
+%         in the active column acts as a root to broadcast this data to its
+%         respective row using \texttt{row\_comm}.
+% \end{enumerate}
+
+% \subsection{Hybrid Parallelization (MPI + OpenMP)}
+% To exploit the multicore architecture of the cluster nodes, we integrated OpenMP into the numerical kernels.
+% While MPI handles the data distribution and inter-node communication, OpenMP threads parallelize the nested loops within the block operations.
+%
+% \textbf{Dynamic Thread Scheduling:}
+% In our \texttt{syrk\_trailing\_matrix} function, we utilize the \texttt{collapse(2)} directive to flatten the nested loops of the matrix update.
+% \begin{verbatim}
+%     #pragma omp parallel for collapse(2) schedule(guided)
+%     for (int i = k + 1; i < total_block_rows; i++) {
+%         for (int j = k + 1; j <= i; j++) {
+%             // Update block A[i][j]
+%         }
+%     }
+% \end{verbatim}
+% We selected \texttt{schedule(guided)} to handle the load imbalance, as the number of blocks to update decreases as the algorithm progresses down the diagonal.

@@ -1,3 +1,55 @@
 \section{Introduction}
-Brief introduction to the project, its objectives, and context.
-Test
+
+\subsection{Problem Description}
+Solving systems of linear equations ($Ax = b$) is one of the most
+common problems in scientific computing. It is used in many fields,
+such as physics simulations, financial modeling, and engineering.
+
+When the matrix $A$ is \textbf{symmetric} (it is equal to its
+transpose, $A = A^T$) and \textbf{positive-definite}, the most
+efficient method to solve the system is the \textbf{Cholesky
+Factorization}. This algorithm decomposes the matrix $A$ into the
+product of a lower triangular matrix $L$ and its transpose $L^T$:
+
+\begin{equation}
+    A = L L^T
+\end{equation}
+
+Once we have calculated $L$, we can solve the original system $Ax=b$
+very quickly. However, calculating $L$ is expensive. The computational
+complexity is $\mathcal{O}(N^3)$, which means that if we double the
+size of the matrix, the time required increases by 8 times. For very
+large matrices, a single processor is not fast enough, so we must use
+parallel computing to distribute the work across many processors.
+
+
+\subsection{Sequential Algorithm Analysis}
+The standard algorithm to compute $L$ works column by column, from left to
+right. For a matrix of size $N \times N$, the algorithm consists of three main
+steps for each column $k$:
+
+\begin{enumerate}
+    \item \textbf{Diagonal Update:} Calculate the square root of the diagonal element ($L_{k,k}$).
+    \item \textbf{Column Update:} Divide the elements below the diagonal in the current column by the diagonal element.
+    \item \textbf{Trailing Matrix Update:} Update the rest of the matrix (the submatrix to the right) using the values calculated in the current column.
+\end{enumerate}
+
+The pseudocode for the serial implementation is shown below:
+
+\begin{algorithm}[H]
+    \caption{Sequential Cholesky Factorization}
+    \label{alg:cholesky_pseudo_code}
+    \begin{algorithmic}[1]
+        \For{$k = 0$ to $N-1$}
+        \State $A[k][k] = \sqrt{A[k][k]}$ \Comment{Step 1: Diagonal}
+        \For{$i = k+1$ to $N-1$}
+        \State $A[i][k] = A[i][k] / A[k][k]$ \Comment{Step 2: Column}
+        \EndFor
+        \For{$j = k+1$ to $N-1$}
+        \For{$i = j$ to $N-1$}
+        \State $A[i][j] = A[i][j] - A[i][k] * A[j][k]$ \Comment{Step 3: Trailing Update}
+        \EndFor
+        \EndFor
+        \EndFor
+    \end{algorithmic}
+\end{algorithm}
