@@ -130,7 +130,7 @@ To mitigate this latency, we divide the matrix into square sub-matrices called
 in the CPU’s cache across multiple operations. Since the Cholesky algorithm
 performs many operations on the same data, working on blocks allows the
 processor to reuse the data residing in the Cache multiple times before needing
-to access the RAM again.
+to access the RAM again \cite{louternool1992block}.
 
 \begin{figure}[h]
     \centering
@@ -170,7 +170,7 @@ to access the RAM again.
 By combining the strengths of the previous steps (Load Balancing + Blocking),
 we implemented the \textbf{2D Block-Cyclic Decomposition}. This is the optimal
 strategy because it solves the communication bottleneck of Step 2 by arranging
-processors in a grid.
+processors in a grid \cite{choi1996design}.
 
 \subsubsection{Process Grid and Distribution Logic}
 To implement the 2D decomposition, we first organize the available processors

@@ -23,12 +23,12 @@ Strong scaling measures the system's ability to solve a \textbf{fixed-size
 problem} faster as more processing resources are added. We analyzed matrix
 sizes ranging from $N=2,048$ to $N=65,536$.
 
-\subsubsection{Small to Medium Matrices ($N=2048, 4096$)}
+\subsubsection{Small to Medium Matrices (\texorpdfstring{$N=2048, 4096$}{N=2048, 4096})}
 For smaller matrices, the communication overhead tends to dominate the
 computation. As the number of cores increases, the sub-block size per process
 decreases, reducing the ratio of computation to communication.
 
-\begin{figure}[h]
+\begin{figure}[htbp]
     \centering
     \begin{subfigure}{0.48\textwidth}
         \includegraphics[width=\linewidth]{images/strong_N2048_speedup.png}
@@ -46,7 +46,7 @@ As seen in Figure \ref{fig:strong_small}, the efficiency for $N=2048$ drops
 rapidly. This is the expected behavior for block-cyclic distributions on small
 datasets, where the cost of broadcasting small panels becomes significant.
 
-\subsubsection{Large Matrices ($N=16,384$ -- $65,536$)}
+\subsubsection{Large Matrices (\texorpdfstring{$N=16,384$ -- $65,536$}{N=16,384 -- 65,536})}
 For larger matrices, the computational load ($O(N^3)$) significantly outweighs communication overhead ($O(N^2)$), allowing the solver to maintain high performance even at higher core counts.
 
 \textbf{Execution Time Analysis:}
@@ -103,7 +103,7 @@ where $N_{base}$ is the matrix size for the baseline process count $P_{base}$.
 This ensures that the local memory footprint ($N^2/P$) and the local arithmetic
 complexity stay roughly invariant, isolating the cost of global communication.
 
-\begin{figure}[h]
+\begin{figure}[htbp]
     \centering
     \begin{subfigure}{0.48\textwidth}
         \includegraphics[width=\linewidth]{images/weak_scaling_time.png}
@@ -126,10 +126,10 @@ modern multi-core clusters.
 
 \begin{itemize}
     \item \textbf{Drastic Reduction in Communication Volume:}
-    Using a hybrid approach (e.g., 4 MPI processes $\times$ 16 OpenMP threads)
+    Using a hybrid approach (e.g., 16 MPI processes $\times$ 4 OpenMP threads)
     instead of pure MPI (64 processes) reduces the process grid dimensions
     significantly. Since broadcast costs scale with $\log_2(P_{row})$ and
-    $\log_2(P_{col})$, reducing the number of MPI ranks by a factor of 16
+    $\log_2(P_{col})$, reducing the number of MPI ranks by a factor of 4
     directly reduces the latency of every panel broadcast.
 
     \item \textbf{Memory Footprint:}
