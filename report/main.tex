@@ -1,4 +1,4 @@
-\documentclass[a4paper,12pt]{article}
+\documentclass[a4paper,10pt]{article}
 
 \usepackage[english]{babel}
 \usepackage[utf8]{inputenc}
@@ -14,6 +14,9 @@
 \usepackage{xurl}
 \usepackage[pdfa]{hyperref}
 \usepackage{tikz}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage{subcaption}
 
 % Document information
 \title{HPC Report \\ Cholesky factorization}
@@ -23,20 +26,22 @@
 \begin{document}
 
 \maketitle
-\tableofcontents
-\newpage
+% \tableofcontents
+% \newpage
 
-\input{sections/abstract}
-\newpage
+% \input{sections/abstract}
+% \newpage
 \input{sections/introduction}
 \newpage
 \input{sections/parallel_design}
 \newpage
 \input{sections/implementation_details}
-
-
 \newpage
-\bibliographystyle{abbrv} 
-\bibliography{references} 
+\input{sections/performance_evaluation}
+
+
+% \newpage
+% \bibliographystyle{abbrv} 
+% \bibliography{references} 
 \end{document}
 

@@ -58,37 +58,245 @@ our solution \text{linear memory scalability}, allowing us to handle problem siz
 that are constrained only by the aggregate memory of the cluster rather than
 the capacity of individual nodes.
 
-% \subsection{Communication Strategy: The Panel Gather}
-% One of the most complex implementation details is handling the "Panel
-% Broadcast" phase. Since the blocks of a column panel are distributed cyclically
-% among different processors in the same column, no single processor holds the
-% entire panel required for the horizontal broadcast.
-%
-% We solved this using a two-step strategy (implemented in
-% \texttt{gather\_column\_panel}):
-% \begin{enumerate}
-%     \item \textbf{Intra-Column Reduction:} We first use \texttt{MPI\_Allreduce}
-%         with the \texttt{MPI\_SUM} operator on the \texttt{col\_comm}. Since
-%         each processor only holds pieces of the panel (and zeros elsewhere),
-%         summing them up effectively "assembles" the full panel on every
-%         processor within that column.
-%     \item \textbf{Row Broadcast:} Once the panel is assembled, each processor
-%         in the active column acts as a root to broadcast this data to its
-%         respective row using \texttt{row\_comm}.
-% \end{enumerate}
+\subsection{Communication Strategy: The Panel Gather}
+One of the most critical implementation challenges is handling the "Panel
+Broadcast." The blocks of the current column $k$ are physically distributed
+among different processors in that process column. However, to perform the
+trailing matrix update, \textit{every} processor in the grid requires access to
+specific parts of this panel.
 
-% \subsection{Hybrid Parallelization (MPI + OpenMP)}
-% To exploit the multicore architecture of the cluster nodes, we integrated OpenMP into the numerical kernels.
-% While MPI handles the data distribution and inter-node communication, OpenMP threads parallelize the nested loops within the block operations.
-%
-% \textbf{Dynamic Thread Scheduling:}
-% In our \texttt{syrk\_trailing\_matrix} function, we utilize the \texttt{collapse(2)} directive to flatten the nested loops of the matrix update.
-% \begin{verbatim}
-%     #pragma omp parallel for collapse(2) schedule(guided)
-%     for (int i = k + 1; i < total_block_rows; i++) {
-%         for (int j = k + 1; j <= i; j++) {
-%             // Update block A[i][j]
-%         }
-%     }
-% \end{verbatim}
-% We selected \texttt{schedule(guided)} to handle the load imbalance, as the number of blocks to update decreases as the algorithm progresses down the diagonal.
+We utilized a \textbf{Full-Column Broadcast Strategy}, implemented as follows:
+
+\subsubsection{1. Justification (The Dependency Problem)}
+The update step requires the following operation: \[ A_{ij} \leftarrow A_{ij} -
+A_{ik} \cdot A_{jk}^T \] To update a local block $A_{ij}$, a processor needs
+the panel block at row $j$ ($A_{jk}$). In a block-cyclic distribution, a
+processor owns columns paired with rows scattered arbitrarily throughout the
+matrix. Consequently, it requires non-contiguous, disjoint blocks from the
+panel that it does not strictly "own." Instead of implementing complex logic to
+pack and send specific fragments to specific neighbors, we broadcast the
+\textbf{entire column panel}. This allows us to use efficient, contiguous
+memory transfers, with the memory overhead ($O(N)$) being negligible compared
+to the computational gain.
+
+\subsubsection{2. The "Zero-Filling" Reduction Logic}
+Since no single processor holds the full panel initially, we must assemble it.
+We use a \textbf{Zero-Filling} strategy combined with \texttt{MPI\_Allreduce}
+to merge the distributed data without complex indexing.
+
+\begin{enumerate}
+    \item \textbf{Global Buffer (Reused):} Each processor allocates a single
+        temporary buffer \texttt{col\_panel} of size $N \times B$ (the full
+        column height). Crucially, this buffer is allocated once and
+        \textbf{reused} for every iteration, ensuring the memory footprint
+        remains constant.
+
+    \item \textbf{Local Preparation:} At the start of the step, each processor
+        in the active column initializes this buffer to zero. It then copies
+        \textit{only} its local blocks into the correct global positions,
+        leaving the rest as zero.
+
+    \item \textbf{Parallel Assembly (Merge):} We perform an
+        \texttt{MPI\_Allreduce} with the \texttt{MPI\_SUM} operator on the
+        \texttt{col\_comm}. Since the data distribution is disjoint (Process A
+        writes to indices where Process B writes zeros, and vice-versa), the
+        arithmetic sum acts as a logical merge: \[ \text{Buffer}[i] =
+        \underbrace{\text{Value}_A}_{\text{Proc A}} +
+    \underbrace{0}_{\text{Proc B}} = \text{Value}_A \]
+
+    \item \textbf{Row Broadcast:} Once the reduction is complete, every
+        processor in the active column holds the fully assembled panel. It then
+        acts as the root to broadcast this panel to its respective row using
+        \texttt{row\_comm}.
+\end{enumerate}
+
+
+\subsection{OpenMP Integration and Scheduling}
+We utilized OpenMP to exploit intra-node parallelism, selecting specific
+scheduling strategies for each numerical phase to maximize thread utilization.
+
+\begin{enumerate}
+    \item \textbf{Diagonal Factorization (Static Schedule):}
+    We parallelized the inner loops of the block factorization. Since the block
+    size is fixed and data is contiguous, we used the default \textbf{Static}
+    schedule to minimize synchronization overhead.
+
+    \item \textbf{Panel Update (Dynamic Schedule):}
+    We parallelized the loop over column blocks $A_{ik}$. Since the processor
+    only owns a sparse subset of blocks (interleaved with those of other
+    processors), the loop contains many "skipped" iterations. A static schedule
+    could result in load imbalance (assigning empty ranges to some threads). We
+    used \texttt{schedule(dynamic)} so threads effectively request active work
+    units on demand.
+
+    \item \textbf{Trailing Update (Guided Schedule):}
+    This is the most compute-intensive phase ($O(N^3)$). We used
+    \texttt{collapse(2)} to flatten the nested loops ($i, j$) into a single
+    iteration space. We selected \texttt{schedule(guided)} because the
+    triangular loop structure ($j \le i$) means the workload decreases as we
+    move down the matrix. Guided scheduling handles this decreasing workload
+    efficiently by reducing chunk sizes dynamically.
+\end{enumerate}
+
+
+
+\subsection{Data Dependency Analysis}
+
+To validate the correctness of our parallelization strategy, we performed a
+systematic data dependency analysis following the three-step methodology:
+detection, classification, and removal (or acknowledgment of non-removable
+dependencies). This analysis focuses on the critical sections of the
+\texttt{parallel\_cholesky} function and its subroutines.
+
+\subsubsection{Outer Loop}
+
+The main algorithmic loop iterates over diagonal blocks $k = 0, \ldots,
+\text{num\_blocks}-1$. We examined dependencies between consecutive iterations
+($k$ vs.\ $k+1$) to determine if this loop can be parallelized.
+
+\begin{table}[H]
+    \centering
+    \small
+    \resizebox{\textwidth}{!}{
+        \begin{tabular}{|l|lll|lll|l|l|}
+            \hline
+            \multirow{2}{*}{\textbf{Memory Location}} &
+            \multicolumn{3}{c|}{\textbf{Earlier Statement}} &
+            \multicolumn{3}{c|}{\textbf{Later Statement}} &
+            \multirow{2}{*}{\textbf{\shortstack{Loop-\\carried?}}} &
+            \multirow{2}{*}{\textbf{\shortstack{Kind of\\Dataflow}}} \\
+            \cline{2-7}
+                                                                   & \textbf{Line} & \textbf{Iteration} & \textbf{Access}
+                                                                   & \textbf{Line} & \textbf{Iteration} & \textbf{Access}
+                                                                   & & \\
+                                                                   \hline
+            \texttt{local\_A} (diag block $k{+}1$) & cholesky.c:208 & $k$ & write
+                                                   & cholesky.c:241 & $k{+}1$ & read & yes & flow \\
+                                                   \hline
+            \texttt{local\_A} (col panel $k{+}1$) & cholesky.c:208 & $k$ & write
+                                                  & cholesky.c:102 & $k{+}1$ & read & yes & flow \\
+                                                  \hline
+            % \texttt{local\_A} (trailing blocks) & cholesky.c:208 & $k$ & write
+            %                                     & cholesky.c:208 & $k{+}1$ & read & yes & flow \\
+            %                                     \hline
+        \end{tabular}
+    }
+    \caption{Loop-carried dependencies in the outer $k$-loop. The SYRK update
+        (line 208) in iteration $k$ modifies blocks that are immediately read in
+        iteration $k{+}1$ for diagonal factorization (line 241) and column panel
+        updates (line 102). These Read-after-Write (RAW) dependencies enforce
+    strict serialization of the block iteration.}
+    \label{tab:dep_outer_k}
+\end{table}
+
+\subsubsection{Diagonal Block Factorization (\texttt{cholesky\_block})}
+
+Within the factorization of a single block, we analyzed the inner $k$-loop
+(lines 11--27 in \texttt{cholesky.c}).
+
+\begin{table}[H]
+    \centering
+    \small
+    \resizebox{\textwidth}{!}{
+        \begin{tabular}{|l|lll|lll|l|l|}
+            \hline
+            \multirow{2}{*}{\textbf{Memory Location}} &
+            \multicolumn{3}{c|}{\textbf{Earlier Statement}} &
+            \multicolumn{3}{c|}{\textbf{Later Statement}} &
+            \multirow{2}{*}{\textbf{\shortstack{Loop-\\carried?}}} &
+            \multirow{2}{*}{\textbf{\shortstack{Kind of\\Dataflow}}} \\
+            \cline{2-7}
+                                                                   & \textbf{Line} & \textbf{Iteration} & \textbf{Access}
+                                                                   & \textbf{Line} & \textbf{Iteration} & \textbf{Access}
+                                                                   & & \\
+                                                                   \hline
+            \texttt{A[k*ld + k]} & cholesky.c:13 & $k$ & write
+                                 & cholesky.c:17 & $k$ & read & no & flow \\
+                                 \hline
+            \texttt{A[i*ld + k]} & cholesky.c:17 & $k$ & write
+                                 & cholesky.c:23 & $k$ & read & no & flow \\
+                                 \hline
+            \texttt{A[i*ld + j]} & cholesky.c:23 & $k$ & write
+                                 & cholesky.c:23 & $k{+}1$ & read & yes & flow \\
+                                 \hline
+            \texttt{A[i*ld + j]} & cholesky.c:23 & $k$ & write
+                                 & cholesky.c:13 & $k{+}1$ & read & yes & flow \\
+                                 \hline
+        \end{tabular}
+    }
+    \caption{The update operation $A[i,j] \leftarrow A[i,j] - A[i,k] \cdot
+        A[j,k]$ (line 23) creates a recurrence: modified elements are required in
+    the next $k$ iteration. This prevents parallelization of the $k$-loop itself.}
+    \label{tab:dep_cholesky_block}
+\end{table}
+
+\subsubsection{TRSM: Column Panel Update (\texttt{trsm\_column\_blocks})}
+
+This function updates blocks below the diagonal by solving $L_{kk} \cdot
+L_{ik}^T = A_{ik}$. We analyzed the outer loop over row blocks $i$.
+
+\begin{table}[H]
+    \centering
+    \small
+    \resizebox{\textwidth}{!}{
+        \begin{tabular}{|l|lll|lll|l|l|}
+            \hline
+            \multirow{2}{*}{\textbf{Memory Location}} &
+            \multicolumn{3}{c|}{\textbf{Earlier Statement}} &
+            \multicolumn{3}{c|}{\textbf{Later Statement}} &
+            \multirow{2}{*}{\textbf{\shortstack{Loop-\\carried?}}} &
+            \multirow{2}{*}{\textbf{\shortstack{Kind of\\Dataflow}}} \\
+            \cline{2-7}
+                                                                   & \textbf{Line} & \textbf{Iteration} & \textbf{Access}
+                                                                   & \textbf{Line} & \textbf{Iteration} & \textbf{Access}
+                                                                   & & \\
+                                                                   \hline
+            \texttt{block\_ik} (block $i$) & cholesky.c:105 & $i$ & write
+                                           & cholesky.c:105 & $i'$ & write & no & output \\
+                                           \hline
+        \end{tabular}
+    }
+    \caption{Dependencies in TRSM column updates. Different row blocks $i$ and
+        $i'$ write to disjoint memory regions (\texttt{block\_ik}), while the
+        shared \texttt{diag\_block} is read-only. No loop-carried dependencies
+    exist, enabling safe parallelization of the $i$-loop.}
+    \label{tab:dep_trsm}
+\end{table}
+
+\subsubsection{SYRK: Trailing Submatrix Update (\texttt{syrk\_trailing\_matrix})}
+
+The most computationally intensive operation updates the trailing submatrix:
+$A_{ij} \leftarrow A_{ij} - A_{ik} \cdot A_{jk}^T$. We examined the nested
+loops over block pairs $(i,j)$.
+
+\begin{table}[H]
+    \centering
+    \small
+    \resizebox{\textwidth}{!}{
+        \begin{tabular}{|l|lll|lll|l|l|}
+            \hline
+            \multirow{2}{*}{\textbf{Memory Location}} &
+            \multicolumn{3}{c|}{\textbf{Earlier Statement}} &
+            \multicolumn{3}{c|}{\textbf{Later Statement}} &
+            \multirow{2}{*}{\textbf{\shortstack{Loop-\\carried?}}} &
+            \multirow{2}{*}{\textbf{\shortstack{Kind of\\Dataflow}}} \\
+            \cline{2-7}
+                                                                   & \textbf{Line} & \textbf{Iteration} & \textbf{Access}
+                                                                   & \textbf{Line} & \textbf{Iteration} & \textbf{Access}
+                                                                   & & \\
+                                                                   \hline
+            \texttt{block\_ij} & cholesky.c:208 & $(i,j)$ & write
+                               & cholesky.c:208 & $(i',j')$ & write & no & output \\
+                               \hline
+            \texttt{col\_panel} (shared) & cholesky.c:206 & $(i,j)$ & read
+                                         & cholesky.c:206 & $(i',j')$ & read & no & input \\
+                                         \hline
+        \end{tabular}
+    }
+    \caption{Dependencies in SYRK trailing matrix update. Different block pairs
+        $(i,j)$ and $(i',j')$ access independent memory regions in
+        \texttt{block\_ij}, while \texttt{col\_panel} is read-only. The absence
+        of loop-carried dependencies allows \texttt{collapse(2)}
+    parallelization.}
+    \label{tab:dep_syrk}
+\end{table}

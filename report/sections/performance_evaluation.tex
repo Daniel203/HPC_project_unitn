@@ -1,0 +1,147 @@
+\section{Performance Evaluation}
+
+\subsection{Methodology}
+The performance analysis was conducted on the UniTN cluster to
+evaluate the scalability and efficiency of the hybrid Cholesky implementation.
+We measured the execution time for various matrix sizes ($N$) and processor
+configurations ($P$). Each data point represents the average of multiple runs
+to minimize system noise. Correctness was verified against a serial
+implementation ($||L \cdot L^T - A|| < \epsilon$) for all reported runs.
+
+We utilize the following standard metrics:
+\begin{itemize}
+    \item \textbf{Speedup ($S$):} $S_P = \frac{T_1}{T_P}$, where $T_1$ is the
+        serial time and $T_P$ is the parallel time.
+    \item \textbf{Efficiency ($E$):} $E_P = \frac{S_P}{P}$, measuring how
+        effectively the additional resources are utilized.
+    \item \textbf{GFLOPS:} The theoretical peak performance calculated as
+        $\frac{N^3/3}{T_{exec}} \times 10^{-9}$.
+\end{itemize}
+
+\subsection{Strong Scaling Analysis}
+Strong scaling measures the system's ability to solve a \textbf{fixed-size
+problem} faster as more processing resources are added. We analyzed matrix
+sizes ranging from $N=2,048$ to $N=65,536$.
+
+\subsubsection{Small to Medium Matrices ($N=2048, 4096$)}
+For smaller matrices, the communication overhead tends to dominate the
+computation. As the number of cores increases, the sub-block size per process
+decreases, reducing the ratio of computation to communication.
+
+\begin{figure}[h]
+    \centering
+    \begin{subfigure}{0.48\textwidth}
+        \includegraphics[width=\linewidth]{images/strong_N2048_speedup.png}
+    \end{subfigure}
+    \begin{subfigure}{0.48\textwidth}
+        \includegraphics[width=\linewidth]{images/strong_N2048_efficiency.png}
+    \end{subfigure}
+    \caption{Strong scaling for small matrices ($N=2048$). The speedup
+        saturates early (around 16-32 cores) as the communication latency outweighs
+    the $O(N^3)$ computational gain.}
+    \label{fig:strong_small}
+\end{figure}
+
+As seen in Figure \ref{fig:strong_small}, the efficiency for $N=2048$ drops
+rapidly. This is the expected behavior for block-cyclic distributions on small
+datasets, where the cost of broadcasting small panels becomes significant.
+
+\subsubsection{Large Matrices ($N=16,384$ -- $65,536$)}
+For larger matrices, the computational load ($O(N^3)$) significantly outweighs communication overhead ($O(N^2)$), allowing the solver to maintain high performance even at higher core counts.
+
+\textbf{Execution Time Analysis:}
+As shown in Figure \ref{fig:time_large}, the execution time drops consistently as resources are added. For the largest case ($N=65,536$), the runtime decreases from over 5000 seconds to under 100 seconds, confirming the solver's capability to drastically reduce time-to-solution for massive datasets.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.48\textwidth}
+        \includegraphics[width=\linewidth]{images/strong_N32768_time.png}
+        \caption{Execution Time ($N=32,768$)}
+    \end{subfigure}
+    \begin{subfigure}{0.48\textwidth}
+        \includegraphics[width=\linewidth]{images/strong_N65536_time.png}
+        \caption{Execution Time ($N=65,536$)}
+    \end{subfigure}
+    \caption{Execution Time comparison. The curve shows a consistent reduction in runtime, validating the strong scaling behavior even for very large problem sizes.}
+    \label{fig:time_large}
+\end{figure}
+
+\textbf{Scalability and Efficiency:}
+Ideally, efficiency should remain at 1.0 ($100\%$). However, as seen in Figure \ref{fig:scalability_large} (b), efficiency naturally decays as the sub-block size per core shrinks.
+\begin{itemize}
+    \item We maintain \textbf{>70\% efficiency} up to 64 cores.
+    \item The drop at higher core counts is expected: when a local block becomes too small, the MPI latency for broadcasting the panel ($O(\log P)$) begins to dominate the update step.
+\end{itemize}
+
+\textbf{Note on Speedup Calculation:} Since a single-core run for $N=65,536$ was infeasible (requiring excessive time and memory), the speedup baseline is calculated relative to the minimum process count required to fit the matrix in memory ($P_{base}$).
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.48\textwidth}
+        \includegraphics[width=\linewidth]{images/strong_N65536_speedup.png}
+        \caption{Speedup ($N=65,536$)}
+    \end{subfigure}
+    \begin{subfigure}{0.48\textwidth}
+        \includegraphics[width=\linewidth]{images/strong_N65536_efficiency.png}
+        \caption{Efficiency ($N=65,536$)}
+    \end{subfigure}
+    \caption{Scalability metrics for the largest dataset. (a) The Speedup follows the linear ideal closely. (b) Efficiency remains high until the granularity of the work becomes too fine for the network latency.}
+    \label{fig:scalability_large}
+\end{figure}
+
+\subsection{Weak Scaling Analysis}
+Weak scaling evaluates the system's ability to solve larger problems as
+resources increase, keeping the \textbf{workload per core constant}.
+
+\subsubsection{Methodology}
+To ensure a consistent computational load, we scaled the matrix size $N$ such that the number of matrix elements owned by each process remained approximately constant (approx. 16 million elements per core).
+The matrix size for $P$ processors was calculated using the square root scaling rule:
+\[
+    N_P \approx N_{base} \times \sqrt{\frac{P}{P_{base}}}
+\]
+where $N_{base}$ is the matrix size for the baseline process count $P_{base}$.
+This ensures that the local memory footprint ($N^2/P$) and the local arithmetic
+complexity stay roughly invariant, isolating the cost of global communication.
+
+\begin{figure}[h]
+    \centering
+    \begin{subfigure}{0.48\textwidth}
+        \includegraphics[width=\linewidth]{images/weak_scaling_time.png}
+        \caption{Execution Time (Weak Scaling)}
+    \end{subfigure}
+    \begin{subfigure}{0.48\textwidth}
+        \includegraphics[width=\linewidth]{images/weak_scaling_efficiency.png}
+        \caption{Efficiency (Weak Scaling)}
+    \end{subfigure}
+    \caption{Weak Scaling Analysis. Ideally, execution time should remain
+        constant (flat). The slight increase is due to the logarithmic growth of
+    global communication steps (broadcasts) as the grid size expands.}
+    \label{fig:weak_scaling}
+\end{figure}
+
+\subsection{The Impact of OpenMP}
+While MPI is necessary for distributed memory scalability, our analysis
+suggests that OpenMP is the critical factor for high-performance efficiency on
+modern multi-core clusters.
+
+\begin{itemize}
+    \item \textbf{Drastic Reduction in Communication Volume:}
+    Using a hybrid approach (e.g., 4 MPI processes $\times$ 16 OpenMP threads)
+    instead of pure MPI (64 processes) reduces the process grid dimensions
+    significantly. Since broadcast costs scale with $\log_2(P_{row})$ and
+    $\log_2(P_{col})$, reducing the number of MPI ranks by a factor of 16
+    directly reduces the latency of every panel broadcast.
+
+    \item \textbf{Memory Footprint:}
+    Pure MPI requires every core to maintain its own communication buffers and
+    ghost cells. OpenMP threads share the same address space, eliminating
+    redundant data copies and allowing us to solve larger problem sizes on the
+    same hardware.
+
+    \item \textbf{Load Balancing via Scheduling:}
+    The Block-Cyclic distribution does a good job of static load balancing, but
+    it cannot adapt to runtime variations (jitter). The use of \texttt{\#pragma
+    omp parallel for schedule(guided)} in the inner kernels allows threads to
+    dynamically steal work, smoothing out minor imbalances that would otherwise
+    stall a pure MPI implementation at synchronization points.
+\end{itemize}
