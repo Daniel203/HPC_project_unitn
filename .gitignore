@@ -58,7 +58,7 @@ benchmarks/
 build/
 venv/
 bin/
-plots/
+# plots/
 
 
 ## Core latex/pdflatex auxiliary files:
